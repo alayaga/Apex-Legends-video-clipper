@@ -28,6 +28,10 @@ COLORS = {
 }
 UI_FONT_MONO = ("Consolas", 10)
 
+APEX_DVR_FILENAME_RE = re.compile(
+    r"^Apex Legends (\d{4}\.\d{2}\.\d{2} - \d{2}\.\d{2}\.\d{2}\.\d{2})\.DVR\.mp4$"
+)
+
 
 def setup_theme(root: tk.Tk) -> ttk.Style:
     """界面主题与 ttk 样式。"""
@@ -199,14 +203,26 @@ def format_duration_display(total_seconds: int) -> str:
     return f"{m}:{s:02d}"
 
 
+def parse_apex_dvr_timestamp(filepath: str) -> str | None:
+    """从 Apex DVR 文件名提取录制时间戳，非标准格式返回 None。"""
+    match = APEX_DVR_FILENAME_RE.match(os.path.basename(filepath))
+    return match.group(1) if match else None
+
+
 def normalize_output_filename(name: str, start_sec: int, end_sec: int) -> str:
     if not name or not name.strip():
         base = f"{format_time_label(start_sec)}-{format_time_label(end_sec)}"
     else:
         base = os.path.basename(name.strip())
-    if not base.lower().endswith(".mp4"):
-        base += ".mp4"
-    return base
+    if base.lower().endswith(".mp4"):
+        base = base[:-4]
+    return base + ".mp4"
+
+
+def append_dvr_timestamp(filename: str, timestamp: str) -> str:
+    """在文件名（不含扩展名）后附加 DVR 录制时间戳。"""
+    base = filename[:-4] if filename.lower().endswith(".mp4") else filename
+    return f"{base}_{timestamp}.mp4"
 
 
 class ClipSegmentFrame(ttk.LabelFrame):
@@ -245,7 +261,7 @@ class ClipSegmentFrame(ttk.LabelFrame):
         self.start_sec = tk.StringVar(value="0")
         self.end_hour = tk.StringVar(value="0")
         self.end_min = tk.StringVar(value="0")
-        self.end_sec = tk.StringVar(value="10")
+        self.end_sec = tk.StringVar(value="0")
         self.output_name = tk.StringVar()
 
         row = 0
@@ -330,12 +346,16 @@ class VideoCutterApp:
 
         self.input_path = tk.StringVar()
         self.output_dir = tk.StringVar(value=DEFAULT_OUTPUT_DIR)
+        self.append_dvr_time = tk.BooleanVar(value=False)
+        self._dvr_timestamp: str | None = None
         self.clip_frames: list[ClipSegmentFrame] = []
         self._processing = False
         self._ffmpeg_ok = check_ffmpeg_available()
 
         self._build_ui()
         self._add_clip()
+        self.input_path.trace_add("write", self._on_input_path_changed)
+        self._update_dvr_append_state()
 
         if not self._ffmpeg_ok:
             messagebox.showerror(
@@ -387,6 +407,16 @@ class VideoCutterApp:
             side=tk.RIGHT
         )
 
+        self.append_dvr_frame = ttk.Frame(output_frame, style="Surface.TFrame")
+        self.append_dvr_frame.pack(fill=tk.X, pady=(8, 0))
+        self.chk_append_dvr = ttk.Checkbutton(
+            self.append_dvr_frame,
+            text="附加录制时间到文件名",
+            variable=self.append_dvr_time,
+            command=self._on_append_dvr_toggle,
+        )
+        self.chk_append_dvr.pack(side=tk.LEFT)
+
         clips_outer = ttk.LabelFrame(
             main, text="片段", style="Section.TLabelframe", padding=10
         )
@@ -431,6 +461,9 @@ class VideoCutterApp:
             command=self._start_cutting,
         )
         self.btn_start.pack(side=tk.LEFT)
+        ttk.Button(action_frame, text="重置", command=self._reset_ui).pack(
+            side=tk.RIGHT
+        )
 
         log_frame = ttk.LabelFrame(
             main, text="日志", style="Section.TLabelframe", padding=10
@@ -480,6 +513,27 @@ class VideoCutterApp:
         elif event.num == 5:
             self.clips_canvas.yview_scroll(1, "units")
 
+    def _reset_ui(self):
+        if self._processing:
+            messagebox.showwarning("提示", "正在裁剪中，请稍后再试。")
+            return
+
+        self.input_path.set("")
+        self.output_dir.set(DEFAULT_OUTPUT_DIR)
+        self.append_dvr_time.set(False)
+
+        for frame in self.clip_frames:
+            frame.destroy()
+        self.clip_frames.clear()
+        self._add_clip()
+
+        self.log_text.configure(state=tk.NORMAL)
+        self.log_text.delete("1.0", tk.END)
+        self.log_text.configure(state=tk.DISABLED)
+
+        self.clips_canvas.yview_moveto(0)
+        self._update_dvr_append_state()
+
     def _browse_input(self):
         path = filedialog.askopenfilename(
             title="选择视频",
@@ -487,6 +541,39 @@ class VideoCutterApp:
         )
         if path:
             self.input_path.set(path)
+
+    def _on_input_path_changed(self, *_args):
+        self._update_dvr_append_state()
+
+    def _update_dvr_append_state(self):
+        path = self.input_path.get().strip()
+        self._dvr_timestamp = parse_apex_dvr_timestamp(path) if path else None
+
+        if self._dvr_timestamp:
+            self.chk_append_dvr.configure(state=tk.NORMAL)
+            self.append_dvr_frame.unbind("<Button-1>")
+            self.chk_append_dvr.unbind("<Button-1>")
+        else:
+            self.append_dvr_time.set(False)
+            self.chk_append_dvr.configure(state=tk.DISABLED)
+            self.append_dvr_frame.bind("<Button-1>", self._on_append_dvr_blocked_click)
+            self.chk_append_dvr.bind("<Button-1>", self._on_append_dvr_blocked_click)
+
+    def _on_append_dvr_blocked_click(self, _event=None):
+        messagebox.showwarning("提示", "该视频非标准的Apex Legends即时重放视频")
+
+    def _on_append_dvr_toggle(self):
+        if not self._dvr_timestamp:
+            self.append_dvr_time.set(False)
+            messagebox.showwarning("提示", "该视频非标准的Apex Legends即时重放视频")
+
+    def _resolve_output_filename(
+        self, frame: ClipSegmentFrame, start_sec: int, end_sec: int
+    ) -> str:
+        filename = frame.get_output_filename(start_sec, end_sec)
+        if self.append_dvr_time.get() and self._dvr_timestamp:
+            filename = append_dvr_timestamp(filename, self._dvr_timestamp)
+        return filename
 
     def _browse_output(self):
         path = filedialog.askdirectory(
@@ -544,6 +631,10 @@ class VideoCutterApp:
     def _set_ui_busy(self, busy: bool):
         def update():
             self.btn_start.configure(state=tk.DISABLED if busy else tk.NORMAL)
+            if busy:
+                self.chk_append_dvr.configure(state=tk.DISABLED)
+            else:
+                self._update_dvr_append_state()
 
         self.root.after(0, update)
 
@@ -639,7 +730,7 @@ class VideoCutterApp:
         try:
             for i, frame in enumerate(self.clip_frames):
                 start_sec, end_sec = frame.get_times()
-                filename = frame.get_output_filename(start_sec, end_sec)
+                filename = self._resolve_output_filename(frame, start_sec, end_sec)
                 output_path = os.path.join(out_dir, filename)
 
                 self._log(

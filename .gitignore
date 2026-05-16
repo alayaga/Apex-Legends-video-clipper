@@ -1,0 +1,40 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+
+# Logs and local test output
+*.log
+*.tmp
+output/
+test_output/
+
+# Optional local config (if you add later)
+.env
+.env.local
+
+# Packaged / build artifacts
+dist/
+build/
+*.egg-info/
+*.egg

@@ -10,7 +10,11 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
-DEFAULT_OUTPUT_DIR = r"F:\lym_things\Videos\Apex Legends"
+VIDEOS_BASE_DIR = r"F:\lym_things\Videos"
+SUPPORTED_GAMES = [
+    "Apex Legends",
+    "Counter-strike 2",
+]
 
 COLORS = {
     "bg": "#14171c",
@@ -28,8 +32,9 @@ COLORS = {
 }
 UI_FONT_MONO = ("Consolas", 10)
 
-APEX_DVR_FILENAME_RE = re.compile(
-    r"^Apex Legends (\d{4}\.\d{2}\.\d{2} - \d{2}\.\d{2}\.\d{2}\.\d{2})\.DVR\.mp4$"
+_escaped_games = [re.escape(g) for g in SUPPORTED_GAMES]
+DVR_FILENAME_RE = re.compile(
+    rf"^({'|'.join(_escaped_games)}) (\d{{4}}\.\d{{2}}\.\d{{2}} - \d{{2}}\.\d{{2}}\.\d{{2}}\.\d{{2}})\.DVR\.mp4$"
 )
 
 
@@ -203,10 +208,12 @@ def format_duration_display(total_seconds: int) -> str:
     return f"{m}:{s:02d}"
 
 
-def parse_apex_dvr_timestamp(filepath: str) -> str | None:
-    """从 Apex DVR 文件名提取录制时间戳，非标准格式返回 None。"""
-    match = APEX_DVR_FILENAME_RE.match(os.path.basename(filepath))
-    return match.group(1) if match else None
+def parse_dvr_info(filepath: str) -> tuple[str, str] | None:
+    """从 DVR 文件名提取 (游戏名, 时间戳)，不匹配返回 None。"""
+    match = DVR_FILENAME_RE.match(os.path.basename(filepath))
+    if match:
+        return match.group(1), match.group(2)
+    return None
 
 
 def normalize_output_filename(name: str, start_sec: int, end_sec: int) -> str:
@@ -345,9 +352,10 @@ class VideoCutterApp:
         self.root.geometry("940x720")
 
         self.input_path = tk.StringVar()
-        self.output_dir = tk.StringVar(value=DEFAULT_OUTPUT_DIR)
+        self.output_dir = tk.StringVar(value=os.path.join(VIDEOS_BASE_DIR, SUPPORTED_GAMES[0]))
         self.append_dvr_time = tk.BooleanVar(value=False)
-        self._dvr_timestamp: str | None = None
+        self._dvr_info: tuple[str, str] | None = None
+        self._user_changed_output = False
         self.clip_frames: list[ClipSegmentFrame] = []
         self._processing = False
         self._ffmpeg_ok = check_ffmpeg_available()
@@ -519,8 +527,9 @@ class VideoCutterApp:
             return
 
         self.input_path.set("")
-        self.output_dir.set(DEFAULT_OUTPUT_DIR)
+        self.output_dir.set(os.path.join(VIDEOS_BASE_DIR, SUPPORTED_GAMES[0]))
         self.append_dvr_time.set(False)
+        self._user_changed_output = False
 
         for frame in self.clip_frames:
             frame.destroy()
@@ -547,9 +556,12 @@ class VideoCutterApp:
 
     def _update_dvr_append_state(self):
         path = self.input_path.get().strip()
-        self._dvr_timestamp = parse_apex_dvr_timestamp(path) if path else None
+        self._dvr_info = parse_dvr_info(path) if path else None
 
-        if self._dvr_timestamp:
+        if self._dvr_info:
+            game, _timestamp = self._dvr_info
+            if not self._user_changed_output:
+                self.output_dir.set(os.path.join(VIDEOS_BASE_DIR, game))
             self.chk_append_dvr.configure(state=tk.NORMAL)
             self.append_dvr_frame.unbind("<Button-1>")
             self.chk_append_dvr.unbind("<Button-1>")
@@ -560,19 +572,21 @@ class VideoCutterApp:
             self.chk_append_dvr.bind("<Button-1>", self._on_append_dvr_blocked_click)
 
     def _on_append_dvr_blocked_click(self, _event=None):
-        messagebox.showwarning("提示", "该视频非标准的Apex Legends即时重放视频")
+        supported = "、".join(SUPPORTED_GAMES)
+        messagebox.showwarning("提示", f"仅支持以下游戏的 DVR 视频：{supported}")
 
     def _on_append_dvr_toggle(self):
-        if not self._dvr_timestamp:
+        if not self._dvr_info:
             self.append_dvr_time.set(False)
-            messagebox.showwarning("提示", "该视频非标准的Apex Legends即时重放视频")
+            supported = "、".join(SUPPORTED_GAMES)
+            messagebox.showwarning("提示", f"仅支持以下游戏的 DVR 视频：{supported}")
 
     def _resolve_output_filename(
         self, frame: ClipSegmentFrame, start_sec: int, end_sec: int
     ) -> str:
         filename = frame.get_output_filename(start_sec, end_sec)
-        if self.append_dvr_time.get() and self._dvr_timestamp:
-            filename = append_dvr_timestamp(filename, self._dvr_timestamp)
+        if self.append_dvr_time.get() and self._dvr_info:
+            filename = append_dvr_timestamp(filename, self._dvr_info[1])
         return filename
 
     def _browse_output(self):
@@ -581,6 +595,7 @@ class VideoCutterApp:
         )
         if path:
             self.output_dir.set(path)
+            self._user_changed_output = True
 
     def _refresh_segment_indices(self) -> None:
         for i, frame in enumerate(self.clip_frames, start=1):

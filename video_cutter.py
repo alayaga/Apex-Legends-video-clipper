@@ -14,6 +14,7 @@ VIDEOS_BASE_DIR = r"F:\lym_things\Videos"
 SUPPORTED_GAMES = [
     "Apex Legends",
     "Counter-strike 2",
+    "Helltaker",
 ]
 
 COLORS = {
